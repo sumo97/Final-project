@@ -1,0 +1,220 @@
+---
+title: "ADA Final Code"
+author: "Holly Smith"
+date: "11/24/2020"
+output: html_document
+---
+
+# Load in Packages
+```{r}
+library(haven)
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(Publish)
+library(tableone)
+library(ROCR)
+library(odds.n.ends)
+library(lubridate)
+library(data.table)
+library(tableone)
+library(funModeling)
+library(varhandle)
+library(gmodels)
+library(survey)
+data <- read_sas("/Users/hollysmith/Downloads/ada_diabetes.sas7bdat")
+```
+
+# Variable Recode
+```{r}
+#RECODE GENDER
+#data$RIAGENDR
+data$gender[data$RIAGENDR==1] <- 0
+data$gender[data$RIAGENDR==2] <- 1
+data$gender <- factor(data$gender, levels = c(0,1))
+
+#RECODE RACE
+#data$RIDRETH3
+data$race[data$RIDRETH3==1&2] <- 1
+data$race[data$RIDRETH3==3] <- 0
+data$race[data$RIDRETH3==4] <- 2
+data$race[data$RIDRETH3==6&7] <- 3
+data$race <- factor(data$race, levels = c(0,1,2,3))
+class(data$race)
+
+#RECODE BMI
+#data$BMXBMI
+data$bmi[data$BMXBMI < 18.5] <- 1
+data$bmi[data$BMXBMI >=18.5 & data$BMXBMI < 25] <-0
+data$bmi[data$BMXBMI >=25 & data$BMXBMI < 30] <-2
+data$bmi[data$BMXBMI >=30] <-3
+data$bmi <- factor(data$bmi, levels = c(0,1,2,3))
+class(data$bmi)
+
+#RECODE DIABETES
+#data$DIQ010
+data$diabetes[data$DIQ010 == 1] <- 1
+data$diabetes[data$DIQ010 == 2] <- 0
+data$diabetes <- factor(data$diabetes, levels = c(0,1))
+
+#RECODE LIFETIME SMOKING
+#data$SMQ020
+data$evsmk <- if_else(data$SMQ020 == 1, 1, 0)
+data$evsmk <- factor(data$evsmk, levels = c(0,1))
+
+#RECODE CURRENT SMOKING
+data$tobacco <- case_when(data$evsmk == 1 & data$SMQ040 %in% c(1,2) ~ 1, 
+                       data$evsmk == 1 & data$SMQ040 %in% c(3) ~ 2, 
+                       data$evsmk == 0 & data$SMQ040 %in% c(NA) ~ 0)
+data$tobacco <- factor(data$tobacco, levels = c(0,1,2))
+class(data$tobacco)
+
+#RECODE INSURANCE
+#data$HIQ011
+data$cover[data$HIQ011 == 1] <- 1
+data$cover[data$HIQ011 == 2] <- 0
+data$cover 
+class(data$cover)
+data$cover <- as.factor(as.numeric(data$cover))
+class(data$cover)
+
+#RECODE AGE
+data$newage[data$RIDAGEYR < 18] <- NA
+data$newage[data$RIDAGEYR >= 18 & data$RIDAGEYR <=39] <-1
+data$newage[data$RIDAGEYR >= 40 & data$RIDAGEYR <=59] <-2
+data$newage[data$RIDAGEYR >= 60 ] <-3
+data$newage <- factor(data$newage, levels = c(1,2,3))
+```
+
+# Prepping Data for Analysis
+```{r}
+# Rename the survey weight variables
+data$persWeight <- data$WTINT2YR
+
+data$psu        <- data$SDMVPSU
+
+data$strata     <- data$SDMVSTRA
+
+
+# Subsetting data for analysis
+nhanesAnalysis <- data %>%
+  select(gender,
+         RIDAGEYR,
+         race,
+         newage,
+         bmi,
+         diabetes,
+         tobacco,
+         cover,
+         persWeight,
+         psu,
+         strata,
+         WTMEC2YR,
+         SDMVSTRA,
+         RIDAGEYR)
+
+# Getting rid of any NA values for age and BMI
+nhanesAnalysis <- nhanesAnalysis %>%
+  filter( !is.na(bmi), !is.na(newage))
+
+# Creating the survey design with weights
+design <-
+  svydesign(
+    id = ~ psu,
+    weights = ~ WTMEC2YR,
+    strata = ~ SDMVSTRA,
+    nest = TRUE,
+    survey.lonely.psu = "adjust",
+    data = nhanesAnalysis
+  )
+```
+
+# Descritives Table
+```{r}
+table1(~newage + tobacco + gender + race  + bmi + cover + newage|diabetes, overall = "total", nhanesAnalysis)
+```
+
+# Crude Model
+```{r}
+crudemodel <-
+ svyglm(
+  formula = diabetes ~ tobacco,
+  data = nhanesAnalysis,
+  family = "binomial",
+  design = design
+ )
+
+publish(crudemodel)
+```
+
+# Adjusted Models
+```{r}
+# Minimally adjusted model
+minisvyadjmodel <-
+  svyglm(
+    formula = diabetes ~ tobacco + newage + gender + race,
+    data = nhanesAnalysis,
+    family = "binomial",
+    design = design
+  )
+
+publish(minisvyadjmodel)
+
+# Fully adjusted model
+
+```
+
+# Adjusted Models Stratified by Age
+```{r}
+full<- glm(diabetes~gender+race+bmi+cover+tobacco, data = nhanesAnalysis[nhanesAnalysis$newage ==1,], family="binomial")
+full2<- glm(diabetes~gender+race+bmi+cover+tobacco, data = nhanesAnalysis[nhanesAnalysis$newage ==2,], family="binomial")
+full3<- glm(diabetes~gender+race+bmi+cover+tobacco, data = nhanesAnalysis[nhanesAnalysis$newage ==3,], family="binomial")
+
+publish(full)
+publish(full2)
+publish(full3)
+```
+
+# Response to Reviewer Comments
+
+### Testing the interaction term between age and smoking status using the likelihood ratio test 
+```{r}
+# Making the interaction term
+
+as.numeric(as.factor(nhanesAnalysis$newage))
+
+new <-glm(diabetes~gender+race+cover+tobacco+newage, data=nhanesAnalysis, family="binomial")
+interaction<- glm(diabetes~gender+race+cover+newage*tobacco, data = nhanesAnalysis, family="binomial")
+
+
+lrtest(new, interaction)
+```
+
+
+### Running models without adjusting for BMI and commenting on differences
+```{r}
+# Fully adjusted model
+newfullmodel <-
+  svyglm(
+    formula = diabetes ~ tobacco + newage + gender + race + cover,
+    data = nhanesAnalysis,
+    family = "binomial",
+    design = design
+  )
+
+publish(newfullmodel) 
+
+# Stratified Models
+# Ages 18-39
+newfull<- glm(diabetes~gender + race + cover + tobacco, data = nhanesAnalysis[nhanesAnalysis$newage ==1,], family="binomial")
+# Ages 40-59
+newfull2<- glm(diabetes~gender + race + cover + tobacco, data = nhanesAnalysis[nhanesAnalysis$newage ==2,], family="binomial")
+# Age >= 60
+newfull3<- glm(diabetes~gender + race + cover + tobacco, data = nhanesAnalysis[nhanesAnalysis$newage ==3,], family="binomial")
+
+publish(newfull)
+publish(newfull2)
+publish(newfull3)
+```
+
+
